@@ -18,7 +18,9 @@ import readabilipy
 from bs4 import BeautifulSoup
 from PIL import Image
 from playwright.async_api import async_playwright
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+import uvicorn
 
 # --- Load environment variables ---
 load_dotenv()
@@ -27,7 +29,7 @@ MY_NUMBER = os.environ.get("MY_NUMBER")
 assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
 
-# --- Auth Provider (keeps Bearer auth) ---
+# --- Auth Provider ---
 class SimpleBearerAuthProvider(BearerAuthProvider):
     def __init__(self, token: str):
         k = RSAKeyPair.generate()
@@ -43,7 +45,7 @@ class SimpleBearerAuthProvider(BearerAuthProvider):
 class RichToolDescription(BaseModel):
     description: str
     use_when: str
-    side_effects: str | None = None
+    side_effects: Optional[str] = None
 
 # --- Fetch Utility Class ---
 class Fetch:
@@ -93,24 +95,6 @@ class Fetch:
 # --- MCP Server Setup ---
 mcp = FastMCP("Job Finder MCP Server", auth=SimpleBearerAuthProvider(TOKEN))
 
-# --- Root Route for Web Access ---
-@mcp.route("/", methods=["GET"])
-async def root():
-    return HTMLResponse("""
-    <html>
-      <head><title>Job Finder MCP Server</title></head>
-      <body>
-        <h1>Job Finder MCP Server is Running!</h1>
-        <p>This MCP server is live. Use your MCP client to interact with the API tools.</p>
-        <ul>
-          <li><a href="/validate">/validate</a> - Validate your phone number</li>
-          <li>/job_finder - Use this tool via MCP client</li>
-          <li>/make_img_black_and_white - Image tool (via MCP client)</li>
-        </ul>
-      </body>
-    </html>
-    """)
-
 # --- Tool: validate ---
 @mcp.tool
 async def validate() -> str:
@@ -120,7 +104,7 @@ async def validate() -> str:
 # --- Job Finder description ---
 JobFinderDescription = RichToolDescription(
     description="Smart job tool: analyze descriptions, fetch URLs, or search jobs based on free text.",
-    use_when="Use this to evaluate job descriptions or search jobs using freeform goals.",
+    use_when="Use this to evaluate job descriptions or search for jobs using freeform goals.",
     side_effects="Returns insights, fetched job descriptions, or relevant job links.",
 )
 
@@ -214,10 +198,25 @@ async def make_img_black_and_white(
     except Exception as e:
         raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e)))
 
-# --- Run MCP Server ---
-async def main():
-    print("🚀 Starting MCP server on http://0.0.0.0:8086")
-    await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
+# --- FastAPI app ---
+api = FastAPI()
+
+@api.get("/", response_class=HTMLResponse)
+async def root():
+    return """
+    <html>
+      <head><title>Job Finder MCP Server</title></head>
+      <body>
+        <h1>Job Finder MCP Server is Running!</h1>
+        <p>This is the root HTTP page served by FastAPI.</p>
+        <p>MCP endpoints are available under <code>/mcp/</code></p>
+      </body>
+    </html>
+    """
+
+# Mount MCP ASGI app under /mcp path
+api.mount("/mcp", mcp.app)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("🚀 Starting FastAPI + MCP server on http://0.0.0.0:8086")
+    uvicorn.run(api, host="0.0.0.0", port=8086)
