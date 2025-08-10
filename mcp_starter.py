@@ -6,8 +6,6 @@ import io
 import tempfile
 from typing import Annotated, Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
 from mcp import ErrorData, McpError
@@ -20,6 +18,7 @@ import readabilipy
 from bs4 import BeautifulSoup
 from PIL import Image
 from playwright.async_api import async_playwright
+from fastapi.responses import HTMLResponse
 
 # --- Load environment variables ---
 load_dotenv()
@@ -93,6 +92,24 @@ class Fetch:
 
 # --- MCP Server Setup ---
 mcp = FastMCP("Job Finder MCP Server", auth=SimpleBearerAuthProvider(TOKEN))
+
+# --- Root Route for Web Access ---
+@mcp.route("/", methods=["GET"])
+async def root():
+    return HTMLResponse("""
+    <html>
+      <head><title>Job Finder MCP Server</title></head>
+      <body>
+        <h1>Job Finder MCP Server is Running!</h1>
+        <p>This MCP server is live. Use your MCP client to interact with the API tools.</p>
+        <ul>
+          <li><a href="/validate">/validate</a> - Validate your phone number</li>
+          <li>/job_finder - Use this tool via MCP client</li>
+          <li>/make_img_black_and_white - Image tool (via MCP client)</li>
+        </ul>
+      </body>
+    </html>
+    """)
 
 # --- Tool: validate ---
 @mcp.tool
@@ -197,29 +214,10 @@ async def make_img_black_and_white(
     except Exception as e:
         raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e)))
 
-# --- Wrap MCP app with FastAPI to serve homepage at / ---
-api = FastAPI()
-
-api.mount("/mcp", mcp.app)
-
-@api.get("/", response_class=HTMLResponse)
-async def root():
-    return """
-    <html>
-        <head><title>Job Finder MCP Server</title></head>
-        <body>
-            <h1>Job Finder MCP Server is Running!</h1>
-            <p>Use the API under <a href="/mcp/">/mcp/</a></p>
-        </body>
-    </html>
-    """
-
+# --- Run MCP Server ---
 async def main():
-    import uvicorn
-    print("🚀 Starting combined FastAPI + MCP server on http://0.0.0.0:8086")
-    config = uvicorn.Config(api, host="0.0.0.0", port=8086)
-    server = uvicorn.Server(config)
-    await server.serve()
+    print("🚀 Starting MCP server on http://0.0.0.0:8086")
+    await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
 
 if __name__ == "__main__":
     asyncio.run(main())
