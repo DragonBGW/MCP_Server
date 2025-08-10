@@ -1,4 +1,4 @@
-# mcp_starter.py - Corrected Version
+# mcp_starter.py
 import asyncio
 import os
 import base64
@@ -7,7 +7,7 @@ import tempfile
 from typing import Annotated, Optional
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.jwt import JWTVerifier, RSAKeyPair  # Updated from deprecated BearerAuthProvider
+from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
 from mcp import ErrorData, McpError
 from mcp.server.auth.provider import AccessToken
 from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
@@ -18,7 +18,6 @@ import readabilipy
 from bs4 import BeautifulSoup
 from PIL import Image
 from playwright.async_api import async_playwright
-from fastapi.middleware.cors import CORSMiddleware
 
 # --- Load environment variables ---
 load_dotenv()
@@ -27,25 +26,16 @@ MY_NUMBER = os.environ.get("MY_NUMBER")
 assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
 
-# --- Updated Auth Provider using JWTVerifier ---
-class SimpleJWTVerifier(JWTVerifier):
+# --- Auth Provider (keeps Bearer auth) ---
+class SimpleBearerAuthProvider(BearerAuthProvider):
     def __init__(self, token: str):
-        key_pair = RSAKeyPair.generate()
-        super().__init__(
-            public_key=key_pair.public_key,
-            issuer=None,
-            audience=None
-        )
+        k = RSAKeyPair.generate()
+        super().__init__(public_key=k.public_key, jwks_uri=None, issuer=None, audience=None)
         self.token = token
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         if token == self.token:
-            return AccessToken(
-                token=token,
-                client_id="puch-client",
-                scopes=["*"],
-                expires_at=None
-            )
+            return AccessToken(token=token, client_id="puch-client", scopes=["*"], expires_at=None)
         return None
 
 # --- Rich Tool Description model ---
@@ -100,33 +90,8 @@ class Fetch:
         return links or ["<error>No results found.</error>"]
 
 # --- MCP Server Setup ---
-mcp = FastMCP(
-    "Job Finder MCP Server",
-    auth=SimpleJWTVerifier(TOKEN),
-    stateless_http=True,
-    json_response=True
-)
+mcp = FastMCP("Job Finder MCP Server", auth=SimpleBearerAuthProvider(TOKEN), stateless_http=True, json_response=True)
 
-# CORS Configuration
-origins = [
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-    "http://localhost:8086",
-    "http://127.0.0.1:8086",
-]
-
-# Correct way to add middleware to FastMCP
-@mcp.app.on_event("startup")
-async def startup_event():
-    mcp.app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-# [Rest of your tools and functions remain exactly the same...]
 # --- Tool: validate ---
 @mcp.tool
 async def validate() -> str:
@@ -140,11 +105,99 @@ JobFinderDescription = RichToolDescription(
     side_effects="Returns insights, fetched job descriptions, or relevant job links.",
 )
 
-# [Rest of your existing code for job_finder, autofill_job_application, etc...]
+# --- Browser automation helper ---
+async def autofill_job_application(job_url: str, resume_path: str, name: str, email: str):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.goto(job_url, wait_until="domcontentloaded")
+        selectors = {
+            "name": ['input[name="name"]', 'input[id*="name"]', 'input[placeholder*="name"]'],
+            "email": ['input[name="email"]', 'input[id*="email"]', 'input[placeholder*="email"]'],
+            "resume": ['input[type="file"]', 'input[name*="resume"]', 'input[name*="cv"]']
+        }
+        for sel in selectors["name"]:
+            if await page.locator(sel).count():
+                await page.fill(sel, name)
+                break
+        for sel in selectors["email"]:
+            if await page.locator(sel).count():
+                await page.fill(sel, email)
+                break
+        for sel in selectors["resume"]:
+            if await page.locator(sel).count():
+                await page.set_input_files(sel, resume_path)
+                break
+        for btn in ['button[type="submit"]', 'input[type="submit"]', 'button:has-text("Apply")', 'a:has-text("Apply")']:
+            if await page.locator(btn).count():
+                await page.click(btn)
+                break
+        await browser.close()
+
+# --- Tool: job_finder ---
+@mcp.tool(description=JobFinderDescription.model_dump_json())
+async def job_finder(
+    user_goal: Annotated[str, Field(description="The user's goal (description, intent, or freeform query)")],
+    job_description: Annotated[Optional[str], Field(description="Full job description text, if available.")] = None,
+    job_url: Annotated[Optional[AnyUrl], Field(description="A URL to fetch a job description from.")] = None,
+    raw: Annotated[bool, Field(description="Return raw HTML content if True")] = False,
+    resume_base64: Annotated[Optional[str], Field(description="Base64-encoded resume to auto-apply")] = None,
+    name: Annotated[Optional[str], Field(description="Applicant full name")] = None,
+    email: Annotated[Optional[str], Field(description="Applicant email")] = None,
+) -> str:
+    if job_url and resume_base64 and name and email:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(base64.b64decode(resume_base64))
+            resume_path = tmp_file.name
+        try:
+            await autofill_job_application(str(job_url), resume_path, name, email)
+            return f"✅ Application submitted successfully at {job_url}"
+        except Exception as e:
+            raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Auto-apply failed: {e}"))
+        finally:
+            try:
+                os.remove(resume_path)
+            except Exception:
+                pass
+
+    if job_description:
+        return f"📝 *Job Description Analysis\n\n---\n{job_description.strip()}\n---\n\nUser Goal: **{user_goal}*\n\n💡 Suggestions:\n- Tailor your resume.\n- Highlight relevant skills.\n- Consider applying if relevant."
+
+    if job_url:
+        content, _ = await Fetch.fetch_url(str(job_url), Fetch.USER_AGENT, force_raw=raw)
+        return f"🔗 *Fetched Job Posting from URL: {job_url}\n\n---\n{content.strip()}\n---\n\nUser Goal: **{user_goal}*"
+
+    if "look for" in user_goal.lower() or "find" in user_goal.lower() or "job" in user_goal.lower():
+        links = await Fetch.google_search_links(user_goal)
+        return f"🔍 *Search Results for*: {user_goal}\n\n" + "\n".join(f"- {link}" for link in links)
+
+    raise McpError(ErrorData(code=INVALID_PARAMS, message="Please provide either a job description, a job URL, a resume+URL+name+email for auto-apply, or a search query in user_goal."))
+
+# --- Image tool ---
+MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION = RichToolDescription(
+    description="Convert an image to black and white and save it.",
+    use_when="Use this tool when the user provides an image URL and requests it to be converted to black and white.",
+    side_effects="The image will be processed and saved in a black and white format.",
+)
+
+@mcp.tool(description=MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION.model_dump_json())
+async def make_img_black_and_white(
+    puch_image_data: Annotated[Optional[str], Field(description="Base64-encoded image data to convert to black and white")] = None,
+) -> list[TextContent | ImageContent]:
+    try:
+        image_bytes = base64.b64decode(puch_image_data)
+        image = Image.open(io.BytesIO(image_bytes))
+        bw_image = image.convert("L")
+        buf = io.BytesIO()
+        bw_image.save(buf, format="PNG")
+        bw_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return [ImageContent(type="image", mimeType="image/png", data=bw_base64)]
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e)))
 
 # --- Run MCP Server ---
 async def main():
-    print("🚀 Starting MCP server on http://0.0.0.0:8086")
+    print("🚀 Starting MCP server (stateless HTTP) on http://0.0.0.0:8086 (streamable-http, stateless, json responses). Use HTTPS in production.")
     await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
 
 if __name__ == "__main__":
