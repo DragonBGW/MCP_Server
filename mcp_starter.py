@@ -100,7 +100,7 @@ origins = [
     "http://127.0.0.1:8086",
 ]
 # Add CORS middleware to underlying FastAPI app
-mcp.app.add_middleware(
+mcp.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
