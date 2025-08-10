@@ -90,18 +90,12 @@ class Fetch:
         return links or ["<error>No results found.</error>"]
 
 # --- MCP Server Setup ---
-mcp = FastMCP("Job Finder MCP Server", auth=SimpleBearerAuthProvider(TOKEN), stateless_http=True, json_response=True)
+mcp = FastMCP("Job Finder MCP Server", auth=SimpleBearerAuthProvider(TOKEN))
 
-# Expose ASGI app for uvicorn
-app = mcp.app
-
-# --- Root endpoint to avoid 404 on '/' ---
+# Add a root route to avoid 404 on /
 @mcp.route("/")
 async def root():
-    return {
-        "message": "MCP server is running.",
-        "available_tools": ["validate", "job_finder", "make_img_black_and_white"]
-    }
+    return {"message": "MCP server is running.", "tools": ["validate", "job_finder", "make_img_black_and_white"]}
 
 # --- Tool: validate ---
 @mcp.tool
@@ -209,7 +203,7 @@ async def make_img_black_and_white(
 # --- Run MCP Server ---
 async def main():
     PORT = int(os.environ.get("PORT", 8086))
-    print(f"🚀 Starting MCP server (stateless HTTP) on http://0.0.0.0:{PORT} (streamable-http, stateless, json responses). Use HTTPS in production.")
+    print(f"🚀 Starting MCP server on http://0.0.0.0:{PORT}")
     await mcp.run_async("streamable-http", host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
