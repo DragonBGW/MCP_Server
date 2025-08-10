@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Job Finder & Applicant</title>
+<style>
+  /* Your existing CSS remains the same */
+  body {
+    font-family: Arial, sans-serif;
+    max-width: 700px;
+    margin: 20px auto;
+    padding: 10px;
+    background: #f9f9f9;
+  }
+  h2 {
+    border-bottom: 2px solid #333;
+    padding-bottom: 6px;
+  }
+  label {
+    display: block;
+    margin-top: 15px;
+  }
+  input[type="text"], input[type="email"], input[type="url"], input[type="file"] {
+    width: 100%;
+    padding: 8px;
+    margin-top: 5px;
+    box-sizing: border-box;
+  }
+  button {
+    margin-top: 15px;
+    padding: 10px 20px;
+    background-color: #0078d7;
+    color: white;
+    border: none;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  button:disabled {
+    background-color: #999;
+    cursor: not-allowed;
+  }
+  #search-results a {
+    display: block;
+    margin: 8px 0;
+    color: #0078d7;
+    text-decoration: none;
+  }
+  #search-results a:hover {
+    text-decoration: underline;
+  }
+  #status, #app-status {
+    margin-top: 15px;
+    padding: 10px;
+    background: #eee;
+    border-radius: 4px;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+
+<h2>Job Search</h2>
+<label for="jobGoal">Enter Job Goal:</label>
+<input type="text" id="jobGoal" placeholder="e.g. Find remote Python backend jobs" />
+<button id="searchBtn">Search Jobs</button>
+<div id="status"></div>
+<div id="search-results"></div>
+
+<hr />
+
+<h2>Job Application</h2>
+<label for="jobUrl">Job Application URL:</label>
+<input type="url" id="jobUrl" placeholder="Paste job URL here" />
+<label for="resumeFile">Upload Resume (PDF):</label>
+<input type="file" id="resumeFile" accept="application/pdf" />
+<label for="fullName">Full Name:</label>
+<input type="text" id="fullName" placeholder="Your full name" />
+<label for="email">Email:</label>
+<input type="email" id="email" placeholder="Your email address" />
+<button id="applyBtn">Submit Application</button>
+<div id="app-status"></div>
+
+<script>
+  const AUTH_TOKEN = prompt("Please enter your AUTH_TOKEN:");
+  if (!AUTH_TOKEN) {
+    alert("Authentication token is required!");
+    window.location.reload();
+  }
+
+  const BASE_URL = "http://localhost:8086";
+
+  // Search jobs button
+  document.getElementById("searchBtn").onclick = async () => {
+    const goal = document.getElementById("jobGoal").value.trim();
+    if (!goal) {
+      alert("Please enter a job goal to search.");
+      return;
+    }
+    const statusDiv = document.getElementById("status");
+    const resultsDiv = document.getElementById("search-results");
+    statusDiv.textContent = "Searching...";
+    resultsDiv.innerHTML = "";
+
+    const payload = {
+      jsonrpc: "2.0",
+      id: crypto.randomUUID(),
+      method: "job_finder",
+      params: {
+        user_goal: goal,
+        job_description: null,
+        job_url: null,
+        raw: false,
+        resume_base64: null,
+        name: null,
+        email: null
+      }
+    };
+
+    try {
+      const resp = await fetch(BASE_URL, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${AUTH_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await resp.json();
+      
+      if (!resp.ok) {
+        throw new Error(data.error?.message || "Request failed");
+      }
+
+      statusDiv.textContent = "Search completed";
+      
+      if (data.result) {
+        const urlRegex = /https?:\/\/[^\s)]+/g;
+        const urls = [...new Set(data.result.match(urlRegex))] || [];
+
+        if (urls.length > 0) {
+          urls.forEach(url => {
+            const a = document.createElement("a");
+            a.href = url;
+            a.target = "_blank";
+            a.textContent = url;
+            resultsDiv.appendChild(a);
+          });
+        } else {
+          resultsDiv.textContent = data.result;
+        }
+      } else {
+        resultsDiv.textContent = "No results found.";
+      }
+    } catch (err) {
+      statusDiv.textContent = `Error: ${err.message}`;
+      console.error("Search error:", err);
+    }
+  };
+
+  // Apply button
+  document.getElementById("applyBtn").onclick = async () => {
+    const jobUrl = document.getElementById("jobUrl").value.trim();
+    const resumeFile = document.getElementById("resumeFile").files[0];
+    const fullName = document.getElementById("fullName").value.trim();
+    const email = document.getElementById("email").value.trim();
+    const appStatusDiv = document.getElementById("app-status");
+
+    if (!jobUrl || !resumeFile || !fullName || !email) {
+      alert("Please fill all fields and upload your resume.");
+      return;
+    }
+
+    appStatusDiv.textContent = "Uploading resume and submitting application...";
+
+    try {
+      const base64Resume = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = error => reject(error);
+        reader.readAsDataURL(resumeFile);
+      });
+
+      const payload = {
+        jsonrpc: "2.0",
+        id: crypto.randomUUID(),
+        method: "job_finder",
+        params: {
+          user_goal: "apply",
+          job_url: jobUrl,
+          resume_base64: base64Resume,
+          name: fullName,
+          email: email
+        }
+      };
+
+      const resp = await fetch(BASE_URL, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${AUTH_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await resp.json();
+      
+      if (!resp.ok) {
+        throw new Error(data.error?.message || "Application failed");
+      }
+
+      appStatusDiv.textContent = data.result || "Application submitted successfully";
+    } catch (err) {
+      appStatusDiv.textContent = `Error: ${err.message}`;
+      console.error("Application error:", err);
+    }
+  };
+</script>
+
+</body>
+</html>
