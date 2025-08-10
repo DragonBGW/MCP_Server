@@ -6,6 +6,8 @@ import io
 import tempfile
 from typing import Annotated, Optional
 from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
 from mcp import ErrorData, McpError
@@ -19,12 +21,14 @@ from bs4 import BeautifulSoup
 from PIL import Image
 from playwright.async_api import async_playwright
 
+# --- Load environment variables ---
 load_dotenv()
 TOKEN = os.environ.get("AUTH_TOKEN")
 MY_NUMBER = os.environ.get("MY_NUMBER")
 assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
 
+# --- Auth Provider (keeps Bearer auth) ---
 class SimpleBearerAuthProvider(BearerAuthProvider):
     def __init__(self, token: str):
         k = RSAKeyPair.generate()
@@ -36,11 +40,13 @@ class SimpleBearerAuthProvider(BearerAuthProvider):
             return AccessToken(token=token, client_id="puch-client", scopes=["*"], expires_at=None)
         return None
 
+# --- Rich Tool Description model ---
 class RichToolDescription(BaseModel):
     description: str
     use_when: str
     side_effects: str | None = None
 
+# --- Fetch Utility Class ---
 class Fetch:
     USER_AGENT = "Puch/1.0 (Autonomous)"
 
@@ -85,18 +91,23 @@ class Fetch:
                 break
         return links or ["<error>No results found.</error>"]
 
+# --- MCP Server Setup ---
 mcp = FastMCP("Job Finder MCP Server", auth=SimpleBearerAuthProvider(TOKEN))
 
+# --- Tool: validate ---
 @mcp.tool
 async def validate() -> str:
+    """Return the phone number in {country_code}{number} format with only digits."""
     return "".join(ch for ch in MY_NUMBER if ch.isdigit())
 
+# --- Job Finder description ---
 JobFinderDescription = RichToolDescription(
     description="Smart job tool: analyze descriptions, fetch URLs, or search jobs based on free text.",
-    use_when="Use this to evaluate job descriptions or search for jobs using freeform goals.",
+    use_when="Use this to evaluate job descriptions or search jobs using freeform goals.",
     side_effects="Returns insights, fetched job descriptions, or relevant job links.",
 )
 
+# --- Browser automation helper ---
 async def autofill_job_application(job_url: str, resume_path: str, name: str, email: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -125,6 +136,7 @@ async def autofill_job_application(job_url: str, resume_path: str, name: str, em
                 break
         await browser.close()
 
+# --- Tool: job_finder ---
 @mcp.tool(description=JobFinderDescription.model_dump_json())
 async def job_finder(
     user_goal: Annotated[str, Field(description="The user's goal (description, intent, or freeform query)")],
@@ -163,6 +175,7 @@ async def job_finder(
 
     raise McpError(ErrorData(code=INVALID_PARAMS, message="Please provide either a job description, a job URL, a resume+URL+name+email for auto-apply, or a search query in user_goal."))
 
+# --- Image tool ---
 MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION = RichToolDescription(
     description="Convert an image to black and white and save it.",
     use_when="Use this tool when the user provides an image URL and requests it to be converted to black and white.",
@@ -184,10 +197,29 @@ async def make_img_black_and_white(
     except Exception as e:
         raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e)))
 
+# --- Wrap MCP app with FastAPI to serve homepage at / ---
+api = FastAPI()
+
+api.mount("/mcp", mcp.app)
+
+@api.get("/", response_class=HTMLResponse)
+async def root():
+    return """
+    <html>
+        <head><title>Job Finder MCP Server</title></head>
+        <body>
+            <h1>Job Finder MCP Server is Running!</h1>
+            <p>Use the API under <a href="/mcp/">/mcp/</a></p>
+        </body>
+    </html>
+    """
+
 async def main():
-    PORT = int(os.environ.get("PORT", 8086))
-    print(f"🚀 Starting MCP server on http://0.0.0.0:{PORT}")
-    await mcp.run_async("streamable-http", host="0.0.0.0", port=PORT)
+    import uvicorn
+    print("🚀 Starting combined FastAPI + MCP server on http://0.0.0.0:8086")
+    config = uvicorn.Config(api, host="0.0.0.0", port=8086)
+    server = uvicorn.Server(config)
+    await server.serve()
 
 if __name__ == "__main__":
     asyncio.run(main())
