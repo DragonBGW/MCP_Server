@@ -6,6 +6,8 @@ import io
 import tempfile
 from typing import Annotated, Optional
 from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
 from mcp import ErrorData, McpError
@@ -18,9 +20,6 @@ import readabilipy
 from bs4 import BeautifulSoup
 from PIL import Image
 from playwright.async_api import async_playwright
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-import uvicorn
 
 # --- Load environment variables ---
 load_dotenv()
@@ -45,7 +44,7 @@ class SimpleBearerAuthProvider(BearerAuthProvider):
 class RichToolDescription(BaseModel):
     description: str
     use_when: str
-    side_effects: Optional[str] = None
+    side_effects: str | None = None
 
 # --- Fetch Utility Class ---
 class Fetch:
@@ -198,25 +197,25 @@ async def make_img_black_and_white(
     except Exception as e:
         raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e)))
 
-# --- FastAPI app ---
+# --- Create FastAPI app and mount MCP ---
 api = FastAPI()
 
 @api.get("/", response_class=HTMLResponse)
-async def root():
+async def root_http():
     return """
     <html>
-      <head><title>Job Finder MCP Server</title></head>
-      <body>
-        <h1>Job Finder MCP Server is Running!</h1>
-        <p>This is the root HTTP page served by FastAPI.</p>
-        <p>MCP endpoints are available under <code>/mcp/</code></p>
-      </body>
+        <head><title>Job Finder MCP Server</title></head>
+        <body>
+            <h1>Job Finder MCP Server is Running!</h1>
+            <p>MCP endpoints are available under <code>/mcp/</code></p>
+        </body>
     </html>
     """
 
-# Mount MCP ASGI app under /mcp path
 api.mount("/mcp", mcp.app)
 
+# --- Run server ---
 if __name__ == "__main__":
-    print("🚀 Starting FastAPI + MCP server on http://0.0.0.0:8086")
+    import uvicorn
+    print("🚀 Starting HTTP + MCP server on http://0.0.0.0:8086")
     uvicorn.run(api, host="0.0.0.0", port=8086)
