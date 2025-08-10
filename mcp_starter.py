@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastmcp import FastMCP
 from mcp import ErrorData, McpError
-from mcp.server.auth.provider import AccessToken, AuthProvider
+from mcp.server.auth.provider import AccessToken
 from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
 from pydantic import BaseModel, Field, AnyUrl
 import markdownify
@@ -27,8 +27,8 @@ MY_NUMBER = os.environ.get("MY_NUMBER")
 assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
 
-# --- Simple custom auth provider ---
-class SimpleBearerAuthProvider(AuthProvider):
+# --- Simple custom auth provider (no inheritance) ---
+class SimpleBearerAuthProvider:
     def __init__(self, token: str):
         self.token = token
 
