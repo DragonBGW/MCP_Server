@@ -9,9 +9,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.jwt import JWTVerifier  # Updated import
 from mcp import ErrorData, McpError
-from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.provider import AccessToken, AuthProvider
 from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
 from pydantic import BaseModel, Field, AnyUrl
 import markdownify
@@ -28,14 +27,12 @@ MY_NUMBER = os.environ.get("MY_NUMBER")
 assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
 
-# --- Auth Provider using JWTVerifier ---
-class SimpleJWTAuthProvider(JWTVerifier):
+# --- Simple custom auth provider ---
+class SimpleBearerAuthProvider(AuthProvider):
     def __init__(self, token: str):
-        super().__init__(issuer=None, audience=None)  # adjust if needed
         self.token = token
 
     async def load_access_token(self, token: str) -> Optional[AccessToken]:
-        # Accept only if token matches exactly
         if token == self.token:
             return AccessToken(token=token, client_id="puch-client", scopes=["*"], expires_at=None)
         return None
@@ -92,7 +89,7 @@ class Fetch:
         return links or ["<error>No results found.</error>"]
 
 # --- MCP Server Setup ---
-mcp = FastMCP("Job Finder MCP Server", auth=SimpleJWTAuthProvider(TOKEN))
+mcp = FastMCP("Job Finder MCP Server", auth=SimpleBearerAuthProvider(TOKEN))
 
 # --- Tool: validate ---
 @mcp.tool
