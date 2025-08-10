@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
+from fastmcp.server.auth.providers.jwt import JWTVerifier  # Updated import
 from mcp import ErrorData, McpError
 from mcp.server.auth.provider import AccessToken
 from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
@@ -28,14 +28,14 @@ MY_NUMBER = os.environ.get("MY_NUMBER")
 assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
 
-# --- Auth Provider ---
-class SimpleBearerAuthProvider(BearerAuthProvider):
+# --- Auth Provider using JWTVerifier ---
+class SimpleJWTAuthProvider(JWTVerifier):
     def __init__(self, token: str):
-        k = RSAKeyPair.generate()
-        super().__init__(public_key=k.public_key, jwks_uri=None, issuer=None, audience=None)
+        super().__init__(issuer=None, audience=None)  # adjust if needed
         self.token = token
 
-    async def load_access_token(self, token: str) -> AccessToken | None:
+    async def load_access_token(self, token: str) -> Optional[AccessToken]:
+        # Accept only if token matches exactly
         if token == self.token:
             return AccessToken(token=token, client_id="puch-client", scopes=["*"], expires_at=None)
         return None
@@ -44,7 +44,7 @@ class SimpleBearerAuthProvider(BearerAuthProvider):
 class RichToolDescription(BaseModel):
     description: str
     use_when: str
-    side_effects: str | None = None
+    side_effects: Optional[str] = None
 
 # --- Fetch Utility Class ---
 class Fetch:
@@ -92,7 +92,7 @@ class Fetch:
         return links or ["<error>No results found.</error>"]
 
 # --- MCP Server Setup ---
-mcp = FastMCP("Job Finder MCP Server", auth=SimpleBearerAuthProvider(TOKEN))
+mcp = FastMCP("Job Finder MCP Server", auth=SimpleJWTAuthProvider(TOKEN))
 
 # --- Tool: validate ---
 @mcp.tool
@@ -212,7 +212,7 @@ async def root_http():
     </html>
     """
 
-api.mount("/mcp", mcp.app)
+api.mount("/mcp", mcp)  # Mount FastMCP instance directly
 
 # --- Run server ---
 if __name__ == "__main__":
